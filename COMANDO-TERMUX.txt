@@ -1,18 +1,14 @@
-COMANDO PARA ENVIAR AO SEU REPOSITÓRIO
-
-1) Baixe wave-music-flutter-v0.2.0.zip para ~/storage/downloads
-2) Execute no Termux:
+COMANDO PARA ENVIAR AO SEU REPOSITORIO (v0.3.0)
 
 cd ~/storage/downloads
-unzip -o wave-music-flutter-v0.2.0.zip -d wave_music_import
+rm -rf wave_music_import Wave_Music_GitHub
+unzip -o wave-music-flutter-v0.3.0.zip -d wave_music_import
 git clone https://github.com/marcus250488-png/-wave-music.git Wave_Music_GitHub
 cd Wave_Music_GitHub
 cp -r ../wave_music_import/wave_music_flutter/. .
 git add -A
-git commit -m "Wave Music v0.2.0 - player local Flutter"
-git push -u origin main
+git status
+git commit -m "Wave Music v0.3.0: streaming Audius, player completo, favoritos"
+git push origin main
 
-Se a pasta Wave_Music_GitHub já existir, entre nela e use git pull --rebase antes de copiar os arquivos.
-Se o Git pedir autenticação, use o método de login/token configurado no seu GitHub. Nunca cole seu token em conversas ou no código do projeto.
-
-Depois do push, abra a aba Actions no repositório e baixe o APK no artifact da execução concluída.
+Depois: GitHub > Actions > Build Wave Music APK > Artifacts > wave-music-android-apk.
