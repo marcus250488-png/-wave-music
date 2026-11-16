@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -14,18 +13,29 @@ const muted = Color(0xFF91A0B7);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.wavemusic.audio',
-    androidNotificationChannelName: 'Wave Music',
-    androidNotificationOngoing: true,
-  );
-  final session = await AudioSession.instance;
-  await session.configure(const AudioSessionConfiguration.music());
-  runApp(const WaveMusicApp());
+  Object? startupError;
+  try {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'com.wavemusic.audio',
+      androidNotificationChannelName: 'Wave Music',
+      androidNotificationOngoing: true,
+    ).timeout(const Duration(seconds: 6));
+    final session = await AudioSession.instance;
+    await session
+        .configure(const AudioSessionConfiguration.music())
+        .timeout(const Duration(seconds: 4));
+  } catch (error) {
+    // Nunca deixa o app preso na tela preta: abre a interface mesmo se o
+    // áudio em segundo plano falhar, e mostra o motivo na tela.
+    startupError = error;
+  }
+  runApp(WaveMusicApp(startupError: startupError));
 }
 
 class WaveMusicApp extends StatelessWidget {
-  const WaveMusicApp({super.key});
+  const WaveMusicApp({super.key, this.startupError});
+
+  final Object? startupError;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -41,7 +51,7 @@ class WaveMusicApp extends StatelessWidget {
           ),
           useMaterial3: true,
         ),
-        home: const PlayerHome(),
+        home: PlayerHome(startupError: startupError),
       );
 }
 
@@ -52,7 +62,9 @@ class LocalTrack {
 }
 
 class PlayerHome extends StatefulWidget {
-  const PlayerHome({super.key});
+  const PlayerHome({super.key, this.startupError});
+
+  final Object? startupError;
 
   @override
   State<PlayerHome> createState() => _PlayerHomeState();
@@ -209,6 +221,19 @@ class _PlayerHomeState extends State<PlayerHome> {
               ),
             ],
           ),
+          if (widget.startupError != null)
+            Container(
+              margin: const EdgeInsets.only(top: 14),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3A1C1C),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Text(
+                'Áudio em segundo plano não iniciou: ${widget.startupError}',
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+            ),
           const SizedBox(height: 25),
           Container(
             padding: const EdgeInsets.all(22),

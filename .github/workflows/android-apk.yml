@@ -63,6 +63,18 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Use AudioServiceActivity as MainActivity
+        shell: bash
+        run: |
+          f=$(find android/app/src/main -name 'MainActivity.*' | head -n 1)
+          echo "MainActivity: $f"
+          if [[ "$f" == *.kt ]]; then
+            sed -i 's/import io.flutter.embedding.android.FlutterActivity/import com.ryanheise.audioservice.AudioServiceActivity/; s/FlutterActivity()/AudioServiceActivity()/' "$f"
+          else
+            sed -i 's/import io.flutter.embedding.android.FlutterActivity;/import com.ryanheise.audioservice.AudioServiceActivity;/; s/extends FlutterActivity/extends AudioServiceActivity/' "$f"
+          fi
+          cat "$f"
+
       - name: Force compileSdk 36 on plugin modules
         shell: bash
         run: |
