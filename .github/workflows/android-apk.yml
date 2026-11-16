@@ -63,6 +63,54 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Force compileSdk 36 on plugin modules
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          kts = Path('android/build.gradle.kts')
+          groovy = Path('android/build.gradle')
+          kts_block = """subprojects {
+              if (name != "app") {
+                  afterEvaluate {
+                      val androidExt = extensions.findByName("android")
+                      if (androidExt != null) {
+                          for (m in androidExt.javaClass.methods) {
+                              val okName = m.name == "setCompileSdk" || m.name == "compileSdkVersion" || m.name == "setCompileSdkVersion"
+                              if (okName && m.parameterCount == 1 &&
+                                  (m.parameterTypes[0] == Int::class.javaPrimitiveType || m.parameterTypes[0] == Int::class.javaObjectType)) {
+                                  try {
+                                      m.invoke(androidExt, 36)
+                                      break
+                                  } catch (e: Exception) {
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          """
+          groovy_block = """subprojects {
+              if (project.name != 'app') {
+                  project.afterEvaluate { p ->
+                      if (p.hasProperty('android')) {
+                          p.android { compileSdkVersion 36 }
+                      }
+                  }
+              }
+          }
+
+          """
+          if kts.exists():
+              kts.write_text(kts_block + kts.read_text())
+          elif groovy.exists():
+              groovy.write_text(groovy_block + groovy.read_text())
+          else:
+              raise SystemExit('android/build.gradle(.kts) nao encontrado')
+          PY
+
       - name: Install dependencies
         run: flutter pub get
 
