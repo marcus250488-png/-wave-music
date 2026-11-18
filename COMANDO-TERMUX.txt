@@ -1,14 +1,14 @@
-COMANDO PARA ENVIAR AO SEU REPOSITORIO (v0.3.0)
+COMANDO PARA ENVIAR AO SEU REPOSITORIO (v0.4.0)
 
 cd ~/storage/downloads
 rm -rf wave_music_import Wave_Music_GitHub
-unzip -o wave-music-flutter-v0.3.0.zip -d wave_music_import
+unzip -o wave-music-flutter-v0.4.0.zip -d wave_music_import
 git clone https://github.com/marcus250488-png/-wave-music.git Wave_Music_GitHub
 cd Wave_Music_GitHub
 cp -r ../wave_music_import/wave_music_flutter/. .
 git add -A
 git status
-git commit -m "Wave Music v0.3.0: streaming Audius, player completo, favoritos"
+git commit -m "Wave Music v0.4.0: playlists, letras, modo moto, equalizador, timer"
 git push origin main
 
 Depois: GitHub > Actions > Build Wave Music APK > Artifacts > wave-music-android-apk.
