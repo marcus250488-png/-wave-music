@@ -508,7 +508,7 @@ class Library extends ChangeNotifier {
 // Controle do player
 // ---------------------------------------------------------------------------
 
-enum RepeatMode { off, all, one }
+enum WaveRepeat { off, all, one }
 
 class PlayerController extends ChangeNotifier {
   PlayerController() {
@@ -532,7 +532,7 @@ class PlayerController extends ChangeNotifier {
   List<Track> queue = [];
   int index = -1;
   bool shuffle = false;
-  RepeatMode repeat = RepeatMode.off;
+  WaveRepeat repeat = WaveRepeat.off;
   bool loading = false;
   String? error;
   Color accent = defaultAccent;
@@ -613,7 +613,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> _onCompleted() async {
-    if (repeat == RepeatMode.one) {
+    if (repeat == WaveRepeat.one) {
       await _player.seek(Duration.zero);
       unawaited(_player.play());
       return;
@@ -631,7 +631,7 @@ class PlayerController extends ChangeNotifier {
     } else {
       n = index + 1;
       if (n >= queue.length) {
-        if (repeat == RepeatMode.all || !auto) {
+        if (repeat == WaveRepeat.all || !auto) {
           n = 0;
         } else {
           await _player.pause();
@@ -670,7 +670,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   void cycleRepeat() {
-    repeat = RepeatMode.values[(repeat.index + 1) % RepeatMode.values.length];
+    repeat = WaveRepeat.values[(repeat.index + 1) % WaveRepeat.values.length];
     notifyListeners();
   }
 

@@ -207,10 +207,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                           IconButton(
                             onPressed: ctrl.cycleRepeat,
                             icon: Icon(
-                              ctrl.repeat == RepeatMode.one
+                              ctrl.repeat == WaveRepeat.one
                                   ? Icons.repeat_one
                                   : Icons.repeat,
-                              color: ctrl.repeat == RepeatMode.off
+                              color: ctrl.repeat == WaveRepeat.off
                                   ? Colors.white70
                                   : blue,
                             ),
