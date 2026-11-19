@@ -1,11 +1,126 @@
-import 'dart:async';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'core.dart';
-import 'player_pages.dart';
 import 'widgets.dart';
+
+// ---------------------------------------------------------------------------
+// Configurações (chave do YouTube)
+// ---------------------------------------------------------------------------
+
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late final TextEditingController _controller =
+      TextEditingController(text: libStore.youtubeKey);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    await libStore.setYoutubeKey(_controller.text);
+    if (!mounted) return;
+    showSnack(context, libStore.hasKey ? 'Chave salva' : 'Chave removida');
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Chave do YouTube'), backgroundColor: bg),
+        body: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            const Text(
+              'O Wave Music busca as músicas pela API oficial do YouTube. '
+              'Para isso você precisa de uma chave gratuita da sua conta Google '
+              '(leva uns 5 minutos):',
+              style: TextStyle(color: muted, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            const _Step('1', 'Abra console.cloud.google.com e entre com sua conta Google.'),
+            const _Step('2', 'Crie um projeto (pode ter qualquer nome).'),
+            const _Step('3',
+                'Em "APIs e serviços" > "Biblioteca", procure "YouTube Data API v3" e toque em Ativar.'),
+            const _Step('4',
+                'Em "Credenciais" > "Criar credenciais" > "Chave de API".'),
+            const _Step('5', 'Copie a chave e cole no campo abaixo.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                hintText: 'Cole a chave aqui (começa com AIza...)',
+                filled: true,
+                fillColor: panel,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            FilledButton(onPressed: _save, child: const Text('Salvar')),
+            const SizedBox(height: 14),
+            const Text(
+              'A cota gratuita do YouTube dá mais ou menos 100 buscas por dia. '
+              'A tela inicial (músicas em alta) gasta quase nada. Não compartilhe '
+              'sua chave com ninguém.',
+              style: TextStyle(color: muted, fontSize: 12, height: 1.4),
+            ),
+          ],
+        ),
+      );
+}
+
+class _Step extends StatelessWidget {
+  const _Step(this.number, this.text);
+
+  final String number;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 11,
+              backgroundColor: blue,
+              child: Text(number,
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w800)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(text, style: const TextStyle(height: 1.35))),
+          ],
+        ),
+      );
+}
+
+class KeyCard extends StatelessWidget {
+  const KeyCard({super.key});
+
+  @override
+  Widget build(BuildContext context) => StateMessage(
+        icon: Icons.vpn_key_outlined,
+        title: 'Falta a chave do YouTube',
+        subtitle: 'Crie uma chave gratuita e cole aqui para liberar a busca '
+            'de músicas de qualquer cantor.',
+        onRetry: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+        ),
+        retryLabel: 'Configurar agora',
+      );
+}
 
 // ---------------------------------------------------------------------------
 // Início
@@ -19,41 +134,65 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  static const _chips = ['Tudo', 'Favoritas', 'Do celular', 'Recentes'];
+  static const _chips = ['Tudo', 'Favoritas', 'Recentes'];
 
   int _chip = 0;
   List<Track> _trending = [];
   List<Track> _forYou = [];
-  String _forYouGenre = 'Electronic';
-  bool _hasTopGenre = false;
-  bool _loading = true;
+  String? _forYouArtist;
+  bool _loading = false;
   String? _error;
+  String _lastKey = libStore.youtubeKey;
 
   @override
   void initState() {
     super.initState();
+    libStore.addListener(_onLibrary);
     _load();
   }
 
+  @override
+  void dispose() {
+    libStore.removeListener(_onLibrary);
+    super.dispose();
+  }
+
+  void _onLibrary() {
+    if (libStore.youtubeKey != _lastKey) {
+      _lastKey = libStore.youtubeKey;
+      _load();
+    }
+  }
+
   Future<void> _load() async {
+    if (!libStore.hasKey) {
+      setState(() {
+        _trending = [];
+        _forYou = [];
+        _error = null;
+        _loading = false;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final top = libStore.topGenre;
-      final genre = top ?? 'Electronic';
-      final results = await Future.wait([
-        AudiusApi.trending(limit: 20),
-        AudiusApi.trending(genre: genre, time: 'month', limit: 20),
-      ]);
+      final trending = await YoutubeApi.trendingBrazil();
       if (!mounted) return;
-      setState(() {
-        _trending = results[0];
-        _forYou = results[1];
-        _forYouGenre = genre;
-        _hasTopGenre = top != null;
-      });
+      setState(() => _trending = trending);
+      final artist = libStore.topArtist;
+      if (artist != null) {
+        try {
+          final forYou = await YoutubeApi.search(artist);
+          if (!mounted) return;
+          setState(() {
+            _forYou = forYou;
+            _forYouArtist = artist;
+          });
+        } catch (_) {}
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -104,22 +243,17 @@ class _HomePageState extends State<HomePage> {
     return tiles;
   }
 
-  List<Track> _chipTracks() {
-    switch (_chip) {
-      case 1:
-        return libStore.favorites;
-      case 2:
-        return libStore.locals;
-      default:
-        return libStore.recents;
-    }
-  }
+  List<Track> _chipTracks() =>
+      _chip == 1 ? libStore.favorites : libStore.recents;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: libStore,
         builder: (context, _) => RefreshIndicator(
-          onRefresh: _load,
+          onRefresh: () async {
+            YoutubeApi.clearCache();
+            await _load();
+          },
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
@@ -132,9 +266,9 @@ class _HomePageState extends State<HomePage> {
                             fontSize: 26, fontWeight: FontWeight.w800)),
                   ),
                   IconButton(
-                    tooltip: 'Modo moto',
-                    onPressed: () => _push(const MotoModePage()),
-                    icon: const Icon(Icons.two_wheeler, color: blue, size: 28),
+                    tooltip: 'Chave do YouTube',
+                    onPressed: () => _push(const SettingsPage()),
+                    icon: const Icon(Icons.settings_outlined),
                   ),
                 ],
               ),
@@ -168,9 +302,7 @@ class _HomePageState extends State<HomePage> {
           title: 'Nada por aqui ainda',
           subtitle: _chip == 1
               ? 'Toque no coração de uma música para guardar aqui.'
-              : _chip == 2
-                  ? 'Adicione músicas do celular na aba Biblioteca.'
-                  : 'As músicas que você ouvir aparecem aqui.',
+              : 'As músicas que você ouvir aparecem aqui.',
         ),
       ];
     }
@@ -197,37 +329,35 @@ class _HomePageState extends State<HomePage> {
         physics: const NeverScrollableScrollPhysics(),
         children: _quickTiles(),
       ),
+      if (!libStore.hasKey) const KeyCard(),
       if (recents.isNotEmpty) ...[
         const SectionTitle('Continue ouvindo'),
         TrackCarousel(tracks: recents),
       ],
-      if (_loading)
-        const Padding(
-          padding: EdgeInsets.only(top: 50),
-          child: Center(child: CircularProgressIndicator()),
-        )
-      else if (_error != null)
-        StateMessage(
-          icon: Icons.wifi_off,
-          title: 'Não consegui carregar as músicas',
-          subtitle: _error,
-          onRetry: _load,
-        )
-      else ...[
-        if (_trending.isNotEmpty) ...[
-          const SectionTitle('Em alta agora', subtitle: 'Streaming pela Audius'),
-          TrackCarousel(tracks: _trending),
-        ],
-        if (_forYou.isNotEmpty) ...[
-          SectionTitle(
-            _hasTopGenre
-                ? 'Mais de $_forYouGenre para você'
-                : 'Descubra: $_forYouGenre',
-            subtitle: _hasTopGenre
-                ? 'Com base no que você mais ouve'
-                : 'Ouça mais e eu aprendo o seu gosto',
-          ),
-          TrackCarousel(tracks: _forYou),
+      if (libStore.hasKey) ...[
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.only(top: 50),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_error != null)
+          StateMessage(
+            icon: Icons.wifi_off,
+            title: 'Não consegui carregar as músicas',
+            subtitle: _error,
+            onRetry: _load,
+          )
+        else ...[
+          if (_trending.isNotEmpty) ...[
+            const SectionTitle('Em alta no Brasil',
+                subtitle: 'Músicas do YouTube'),
+            TrackCarousel(tracks: _trending),
+          ],
+          if (_forYou.isNotEmpty && _forYouArtist != null) ...[
+            SectionTitle('Mais de $_forYouArtist',
+                subtitle: 'Com base no que você mais ouve'),
+            TrackCarousel(tracks: _forYou),
+          ],
         ],
       ],
     ];
@@ -256,7 +386,6 @@ class _SearchPageState extends State<SearchPage> {
   ];
 
   final TextEditingController _text = TextEditingController();
-  Timer? _debounce;
   List<Track> _results = [];
   bool _loading = false;
   bool _searched = false;
@@ -266,14 +395,8 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   void dispose() {
-    _debounce?.cancel();
     _text.dispose();
     super.dispose();
-  }
-
-  void _onChanged(String value) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 450), () => _search(value));
   }
 
   Future<void> _run(Future<List<Track>> Function() task) async {
@@ -310,14 +433,15 @@ class _SearchPageState extends State<SearchPage> {
       });
       return;
     }
-    await _run(() => AudiusApi.search(query));
+    FocusScope.of(context).unfocus();
+    await _run(() => YoutubeApi.search(query));
   }
 
-  Future<void> _openGenre(String genre) async {
+  Future<void> _openGenre(String name, String query) async {
     FocusScope.of(context).unfocus();
     _text.clear();
-    setState(() => _genreTitle = genre);
-    await _run(() => AudiusApi.trending(genre: genre, time: 'month', limit: 30));
+    setState(() => _genreTitle = name);
+    await _run(() => YoutubeApi.search(query));
   }
 
   void _clearGenre() {
@@ -334,100 +458,107 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final browsing = !_searched && !_loading && _error == null;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      children: [
-        const Text('Buscar',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 14),
-        TextField(
-          controller: _text,
-          onChanged: _onChanged,
-          onSubmitted: _search,
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            hintText: 'O que você quer ouvir?',
-            prefixIcon: const Icon(Icons.search),
-            filled: true,
-            fillColor: panel,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
+    final genres = kGenres.entries.toList();
+    return ListenableBuilder(
+      listenable: libStore,
+      builder: (context, _) => ListView(
+        padding: const EdgeInsets.all(16),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        children: [
+          const Text('Buscar',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _text,
+            onSubmitted: _search,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Cantor, banda ou música',
+              prefixIcon: const Icon(Icons.search),
+              filled: true,
+              fillColor: panel,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        if (_genreTitle != null)
-          Row(
-            children: [
-              IconButton(
-                onPressed: _clearGenre,
-                icon: const Icon(Icons.arrow_back),
+          const SizedBox(height: 14),
+          if (!libStore.hasKey)
+            const KeyCard()
+          else ...[
+            if (_genreTitle != null)
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: _clearGenre,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Text(_genreTitle!,
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w800)),
+                  ),
+                ],
               ),
-              Expanded(
-                child: Text('Em alta em $_genreTitle',
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ),
-        if (_loading)
-          const Padding(
-            padding: EdgeInsets.only(top: 40),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (_error != null)
-          StateMessage(
-            icon: Icons.wifi_off,
-            title: 'Erro na busca',
-            subtitle: _error,
-            onRetry: () => _genreTitle != null
-                ? _openGenre(_genreTitle!)
-                : _search(_text.text),
-          )
-        else if (_searched && _results.isEmpty)
-          const StateMessage(
-            icon: Icons.search_off,
-            title: 'Nenhum resultado',
-            subtitle: 'Tente outro nome de música ou artista.',
-          )
-        else if (browsing) ...[
-          const SectionTitle('Explorar tudo'),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: kGenres.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 2.1,
-            ),
-            itemBuilder: (context, i) => Material(
-              color: _palette[i % _palette.length],
-              borderRadius: BorderRadius.circular(10),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => _openGenre(kGenres[i]),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(kGenres[i],
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w800, fontSize: 16)),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.only(top: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null)
+              StateMessage(
+                icon: Icons.wifi_off,
+                title: 'Erro na busca',
+                subtitle: _error,
+                onRetry: () => _genreTitle != null
+                    ? _openGenre(_genreTitle!, kGenres[_genreTitle!] ?? _genreTitle!)
+                    : _search(_text.text),
+              )
+            else if (_searched && _results.isEmpty)
+              const StateMessage(
+                icon: Icons.search_off,
+                title: 'Nenhum resultado',
+                subtitle: 'Tente outro nome de música ou artista.',
+              )
+            else if (browsing) ...[
+              const SectionTitle('Explorar tudo'),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: genres.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 2.1,
+                ),
+                itemBuilder: (context, i) => Material(
+                  color: _palette[i % _palette.length],
+                  borderRadius: BorderRadius.circular(10),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => _openGenre(genres[i].key, genres[i].value),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(genres[i].key,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 16)),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-        ] else
-          ...List.generate(
-            _results.length,
-            (i) => TrackTile(
-              track: _results[i],
-              onTap: () => playerCtrl.playQueue(_results, i),
-            ),
-          ),
-      ],
+            ] else
+              ...List.generate(
+                _results.length,
+                (i) => TrackTile(
+                  track: _results[i],
+                  onTap: () => playerCtrl.playQueue(_results, i),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -445,24 +576,6 @@ class LibraryPage extends StatefulWidget {
 
 class _LibraryPageState extends State<LibraryPage> {
   int _section = 1;
-
-  Future<void> _addLocal() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.audio,
-        allowMultiple: true,
-      );
-      if (result == null) return;
-      final items = result.files
-          .where((f) => f.path != null)
-          .map((f) => Track.local(f.path!, f.name))
-          .toList();
-      await libStore.addLocals(items);
-    } catch (e) {
-      if (!mounted) return;
-      showSnack(context, 'Não consegui abrir os arquivos: $e');
-    }
-  }
 
   Future<void> _newPlaylist() async {
     final name = await promptPlaylistName(context);
@@ -490,13 +603,6 @@ class _LibraryPageState extends State<LibraryPage> {
                     icon: const Icon(Icons.add_circle_outline,
                         color: blue, size: 30),
                   ),
-                if (_section == 2)
-                  IconButton(
-                    onPressed: _addLocal,
-                    tooltip: 'Adicionar músicas do celular',
-                    icon: const Icon(Icons.add_circle_outline,
-                        color: blue, size: 30),
-                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -505,7 +611,6 @@ class _LibraryPageState extends State<LibraryPage> {
               segments: const [
                 ButtonSegment(value: 0, label: Text('Favoritas')),
                 ButtonSegment(value: 1, label: Text('Playlists')),
-                ButtonSegment(value: 2, label: Text('Do celular')),
               ],
               selected: {_section},
               onSelectionChanged: (s) => setState(() => _section = s.first),
@@ -518,17 +623,13 @@ class _LibraryPageState extends State<LibraryPage> {
 
   List<Widget> _content() {
     if (_section == 1) return _playlistsContent();
-    final list = _section == 0 ? libStore.favorites : libStore.locals;
+    final list = libStore.favorites;
     if (list.isEmpty) {
       return [
-        StateMessage(
-          icon: _section == 0 ? Icons.favorite_border : Icons.folder_open,
-          title: _section == 0
-              ? 'Nenhuma favorita ainda'
-              : 'Nenhum arquivo adicionado',
-          subtitle: _section == 0
-              ? 'Toque no coração de uma música para guardar aqui.'
-              : 'Use o botão + para escolher músicas do celular.',
+        const StateMessage(
+          icon: Icons.favorite_border,
+          title: 'Nenhuma favorita ainda',
+          subtitle: 'Toque no coração de uma música para guardar aqui.',
         ),
       ];
     }
@@ -537,15 +638,6 @@ class _LibraryPageState extends State<LibraryPage> {
       (i) => TrackTile(
         track: list[i],
         onTap: () => playerCtrl.playQueue(list, i),
-        extra: _section == 2
-            ? [
-                MenuAction(
-                  'Remover da lista',
-                  Icons.delete_outline,
-                  () => libStore.removeLocal(list[i].id),
-                ),
-              ]
-            : const [],
       ),
     );
   }
@@ -559,6 +651,7 @@ class _LibraryPageState extends State<LibraryPage> {
           title: 'Nenhuma playlist ainda',
           subtitle: 'Crie uma e adicione músicas pelo menu ⋮ de cada faixa.',
           onRetry: _newPlaylist,
+          retryLabel: 'Criar playlist',
         ),
       ];
     }

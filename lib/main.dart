@@ -1,40 +1,20 @@
-import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 
 import 'core.dart';
+import 'lyrics_panel.dart';
 import 'pages.dart';
-import 'player_pages.dart';
 import 'widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  Object? startupError;
-  try {
-    await JustAudioBackground.init(
-      androidNotificationChannelId: 'com.wavemusic.audio',
-      androidNotificationChannelName: 'Wave Music',
-      androidNotificationOngoing: true,
-    ).timeout(const Duration(seconds: 6));
-    final session = await AudioSession.instance;
-    await session
-        .configure(const AudioSessionConfiguration.music())
-        .timeout(const Duration(seconds: 4));
-  } catch (error) {
-    // Nunca deixa o app preso na tela preta: abre a interface mesmo se o
-    // áudio em segundo plano falhar, e mostra o motivo na tela.
-    startupError = error;
-  }
   try {
     await libStore.load().timeout(const Duration(seconds: 3));
   } catch (_) {}
-  runApp(WaveMusicApp(startupError: startupError));
+  runApp(const WaveMusicApp());
 }
 
 class WaveMusicApp extends StatelessWidget {
-  const WaveMusicApp({super.key, this.startupError});
-
-  final Object? startupError;
+  const WaveMusicApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -50,14 +30,12 @@ class WaveMusicApp extends StatelessWidget {
           ),
           useMaterial3: true,
         ),
-        home: Shell(startupError: startupError),
+        home: const Shell(),
       );
 }
 
 class Shell extends StatefulWidget {
-  const Shell({super.key, this.startupError});
-
-  final Object? startupError;
+  const Shell({super.key});
 
   @override
   State<Shell> createState() => _ShellState();
@@ -65,6 +43,7 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _tab = 0;
+  bool _lyricsOpen = false;
 
   @override
   void initState() {
@@ -86,49 +65,35 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
-  void _openNowPlaying() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => const NowPlayingPage(),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
         body: SafeArea(
           child: Column(
             children: [
-              if (widget.startupError != null)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3A1C1C),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Áudio em segundo plano não iniciou: ${widget.startupError}',
-                    style: const TextStyle(fontSize: 11, color: Colors.white70),
-                  ),
-                ),
               Expanded(
-                child: IndexedStack(
-                  index: _tab,
-                  children: const [
-                    HomePage(),
-                    SearchPage(),
-                    LibraryPage(),
+                child: Stack(
+                  children: [
+                    IndexedStack(
+                      index: _tab,
+                      children: const [
+                        HomePage(),
+                        SearchPage(),
+                        LibraryPage(),
+                      ],
+                    ),
+                    if (_lyricsOpen)
+                      Positioned.fill(
+                        child: LyricsPanel(
+                          onClose: () => setState(() => _lyricsOpen = false),
+                        ),
+                      ),
                   ],
                 ),
               ),
-              ListenableBuilder(
-                listenable: playerCtrl,
-                builder: (context, _) => playerCtrl.current == null
-                    ? const SizedBox.shrink()
-                    : MiniPlayer(onTap: _openNowPlaying),
+              PlayerDock(
+                lyricsOpen: _lyricsOpen,
+                onToggleLyrics: () =>
+                    setState(() => _lyricsOpen = !_lyricsOpen),
               ),
               NavigationBar(
                 selectedIndex: _tab,

@@ -5,9 +5,13 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart'
+    show
+        PlayerState,
+        YoutubePlayerController,
+        YoutubePlayerParams,
+        YoutubePlayerValue;
 
 // ---------------------------------------------------------------------------
 // Configuração e cores
@@ -20,34 +24,23 @@ const blue = Color(0xFF287BFF);
 const muted = Color(0xFF91A0B7);
 const defaultAccent = Color(0xFF172338);
 
-const kAudiusBase = 'https://api.audius.co/v1';
-const kAppName = 'WaveMusic';
+/// Gêneros do "Explorar": nome na tela -> o que é buscado no YouTube.
+const kGenres = <String, String>{
+  'Sertanejo': 'sertanejo as melhores',
+  'Funk': 'funk brasil as melhores',
+  'Pagode': 'pagode as melhores',
+  'MPB': 'mpb as melhores',
+  'Rock nacional': 'rock nacional as melhores',
+  'Rap nacional': 'rap nacional as melhores',
+  'Forró': 'forró as melhores',
+  'Gospel': 'gospel as melhores',
+  'Pop': 'pop hits',
+  'Eletrônica': 'música eletrônica hits',
+  'Samba': 'samba as melhores',
+  'Reggae': 'reggae as melhores',
+};
 
-/// Opcional: chave gratuita da Audius (audius.co/settings -> "Manage Your
-/// Apps"). Sem chave o app funciona, só com limite de uso menor.
-const kAudiusApiKey = '';
-
-const kGenres = <String>[
-  'Electronic',
-  'Hip-Hop/Rap',
-  'Pop',
-  'Rock',
-  'Lo-Fi',
-  'R&B/Soul',
-  'Jazz',
-  'Latin',
-  'Alternative',
-  'Metal',
-  'Folk',
-  'Funk',
-  'Reggae',
-  'Ambient',
-  'Trap',
-  'House',
-];
-
-/// Instâncias únicas usadas pelo app inteiro (criadas só no primeiro uso,
-/// depois do init do áudio em segundo plano).
+/// Instâncias únicas usadas pelo app inteiro.
 final PlayerController playerCtrl = PlayerController();
 final Library libStore = Library();
 
@@ -60,73 +53,27 @@ class Track {
     required this.id,
     required this.title,
     required this.artist,
-    required this.uri,
     this.artwork,
-    this.durationSec,
-    this.genre,
-    this.isLocal = false,
   });
 
+  /// ID do vídeo no YouTube.
   final String id;
   final String title;
   final String artist;
-  final String uri;
   final String? artwork;
-  final int? durationSec;
-  final String? genre;
-  final bool isLocal;
-
-  factory Track.fromAudius(Map<String, dynamic> j) {
-    final id = j['id'].toString();
-    final art = j['artwork'];
-    String? artwork;
-    if (art is Map) {
-      artwork = (art['480x480'] ?? art['150x150'] ?? art['1000x1000'])
-          ?.toString();
-    }
-    final user = j['user'];
-    final duration = j['duration'];
-    return Track(
-      id: id,
-      title: (j['title'] ?? 'Sem título').toString(),
-      artist: user is Map ? (user['name'] ?? 'Artista').toString() : 'Artista',
-      uri: '$kAudiusBase/tracks/$id/stream?app_name=$kAppName',
-      artwork: artwork,
-      durationSec: duration is num ? duration.toInt() : null,
-      genre: j['genre']?.toString(),
-    );
-  }
-
-  factory Track.local(String path, String fileName) => Track(
-        id: 'local:$path',
-        title: fileName.replaceFirst(RegExp(r'\.[^.]+$'), ''),
-        artist: 'Arquivo local',
-        uri: Uri.file(path).toString(),
-        isLocal: true,
-      );
 
   factory Track.fromJson(Map<String, dynamic> j) => Track(
         id: j['id'].toString(),
         title: j['title'].toString(),
         artist: j['artist'].toString(),
-        uri: j['uri'].toString(),
         artwork: j['artwork']?.toString(),
-        durationSec: j['durationSec'] is num
-            ? (j['durationSec'] as num).toInt()
-            : null,
-        genre: j['genre']?.toString(),
-        isLocal: j['isLocal'] == true,
       );
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'artist': artist,
-        'uri': uri,
         'artwork': artwork,
-        'durationSec': durationSec,
-        'genre': genre,
-        'isLocal': isLocal,
       };
 }
 
@@ -161,47 +108,141 @@ class Playlist {
 }
 
 // ---------------------------------------------------------------------------
-// API da Audius (streaming)
+// API oficial do YouTube (YouTube Data API v3)
 // ---------------------------------------------------------------------------
 
-class AudiusApi {
-  static Map<String, String> get _headers => kAudiusApiKey.isEmpty
-      ? <String, String>{}
-      : <String, String>{'Authorization': 'Bearer $kAudiusApiKey'};
+class MissingKeyException implements Exception {
+  const MissingKeyException();
+  @override
+  String toString() => 'Falta a chave do YouTube.';
+}
 
-  static Future<List<Track>> _get(String path, Map<String, String> query) async {
-    final uri = Uri.parse('$kAudiusBase$path')
-        .replace(queryParameters: {...query, 'app_name': kAppName});
-    final res = await http
-        .get(uri, headers: _headers)
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) {
-      throw Exception('A Audius respondeu ${res.statusCode}');
-    }
-    final body = jsonDecode(utf8.decode(res.bodyBytes));
-    final data = body is Map ? body['data'] : null;
-    if (data is! List) return <Track>[];
-    return data
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .where((e) => e['is_streamable'] != false)
-        .map(Track.fromAudius)
-        .toList();
+class YoutubeApiException implements Exception {
+  const YoutubeApiException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+class YoutubeApi {
+  static final Map<String, List<Track>> _cache = {};
+
+  static String _unescape(String s) => s
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>');
+
+  static String _cleanChannel(String? raw) {
+    var s = _unescape(raw ?? 'Artista');
+    s = s.replaceAll(RegExp(r'\s*-\s*Topic$'), '');
+    return s.trim().isEmpty ? 'Artista' : s.trim();
   }
 
-  static Future<List<Track>> trending({
-    String? genre,
-    String time = 'week',
-    int limit = 30,
-  }) =>
-      _get('/tracks/trending', {
-        'time': time,
-        'limit': '$limit',
-        if (genre != null) 'genre': genre,
+  static String _friendlyError(int status, dynamic body) {
+    String message = 'Erro $status ao falar com o YouTube.';
+    String? reason;
+    if (body is Map && body['error'] is Map) {
+      final err = body['error'] as Map;
+      if (err['message'] != null) message = err['message'].toString();
+      final errors = err['errors'];
+      if (errors is List && errors.isNotEmpty && errors.first is Map) {
+        reason = (errors.first as Map)['reason']?.toString();
+      }
+    }
+    if (reason == 'quotaExceeded' || reason == 'rateLimitExceeded') {
+      return 'A cota diária gratuita do YouTube acabou. Volta amanhã ou '
+          'crie outra chave.';
+    }
+    if (reason == 'keyInvalid' || message.contains('API key not valid')) {
+      return 'Chave inválida. Confira a chave nas configurações.';
+    }
+    if (reason == 'accessNotConfigured' || reason == 'forbidden') {
+      return 'Ative a "YouTube Data API v3" no projeto onde você criou a chave.';
+    }
+    return message;
+  }
+
+  static List<Track> _parse(dynamic body) {
+    final items = body is Map ? body['items'] : null;
+    if (items is! List) return <Track>[];
+    final out = <Track>[];
+    for (final item in items.whereType<Map>()) {
+      final idRaw = item['id'];
+      final id = idRaw is Map ? idRaw['videoId']?.toString() : idRaw?.toString();
+      final snippet = item['snippet'];
+      if (id == null || id.isEmpty || snippet is! Map) continue;
+      String? art;
+      final thumbs = snippet['thumbnails'];
+      if (thumbs is Map) {
+        for (final k in const ['high', 'medium', 'default']) {
+          final t = thumbs[k];
+          if (t is Map && t['url'] != null) {
+            art = t['url'].toString();
+            break;
+          }
+        }
+      }
+      out.add(Track(
+        id: id,
+        title: _unescape(snippet['title']?.toString() ?? 'Sem título'),
+        artist: _cleanChannel(snippet['channelTitle']?.toString()),
+        artwork: art,
+      ));
+    }
+    return out;
+  }
+
+  static Future<List<Track>> _call(String path, Map<String, String> query) async {
+    final key = libStore.youtubeKey;
+    if (key.isEmpty) throw const MissingKeyException();
+    final sorted = query.entries.map((e) => '${e.key}=${e.value}').toList()
+      ..sort();
+    final cacheKey = '$path?${sorted.join('&')}';
+    final cached = _cache[cacheKey];
+    if (cached != null) return cached;
+
+    final uri =
+        Uri.https('www.googleapis.com', '/youtube/v3$path', {...query, 'key': key});
+    final res = await http.get(uri).timeout(const Duration(seconds: 15));
+    dynamic body;
+    try {
+      body = jsonDecode(utf8.decode(res.bodyBytes));
+    } catch (_) {
+      body = null;
+    }
+    if (res.statusCode != 200) {
+      throw YoutubeApiException(_friendlyError(res.statusCode, body));
+    }
+    final tracks = _parse(body);
+    _cache[cacheKey] = tracks;
+    return tracks;
+  }
+
+  /// Músicas em alta no Brasil (custa só 1 unidade da cota diária).
+  static Future<List<Track>> trendingBrazil() => _call('/videos', {
+        'part': 'snippet',
+        'chart': 'mostPopular',
+        'videoCategoryId': '10',
+        'regionCode': 'BR',
+        'maxResults': '25',
       });
 
-  static Future<List<Track>> search(String query) =>
-      _get('/tracks/search', {'query': query, 'limit': '30'});
+  /// Busca músicas (categoria Música, só vídeos que podem ser incorporados).
+  static Future<List<Track>> search(String query) => _call('/search', {
+        'part': 'snippet',
+        'type': 'video',
+        'videoCategoryId': '10',
+        'videoEmbeddable': 'true',
+        'videoSyndicated': 'true',
+        'regionCode': 'BR',
+        'relevanceLanguage': 'pt',
+        'maxResults': '25',
+        'q': query,
+      });
+
+  static void clearCache() => _cache.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -250,19 +291,46 @@ class LrcLib {
     return out;
   }
 
-  static Future<Lyrics> fetch(Track track) async {
-    final uri = Uri.https('lrclib.net', '/api/search', {
-      'track_name': track.title,
-      if (!track.isLocal) 'artist_name': track.artist,
-    });
+  /// Limpa títulos do YouTube ("Artista - Música (Clipe Oficial)").
+  static ({String artist, String title}) guess(Track track) {
+    var title = track.title.replaceAll(RegExp(r'\([^)]*\)|\[[^\]]*\]'), ' ');
+    title = title.replaceAll(
+      RegExp(
+          r'\b(official|oficial|clipe|video|vídeo|videoclipe|áudio|audio|lyrics|letra|ao vivo|hd|4k)\b',
+          caseSensitive: false),
+      ' ',
+    );
+    var artist = track.artist;
+    final parts = title.split(RegExp(r'\s[-–—|]\s'));
+    if (parts.length >= 2) {
+      artist = parts.first.trim();
+      title = parts.sublist(1).join(' ').trim();
+    }
+    title = title.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return (artist: artist, title: title);
+  }
+
+  static Future<List<Map>> _search(Map<String, String> query) async {
+    final uri = Uri.https('lrclib.net', '/api/search', query);
     final res = await http
-        .get(uri, headers: {'User-Agent': 'WaveMusic/0.4.0'})
+        .get(uri, headers: {'User-Agent': 'WaveMusic/0.5.0'})
         .timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) return Lyrics.empty;
+    if (res.statusCode != 200) return [];
     final body = jsonDecode(utf8.decode(res.bodyBytes));
-    if (body is! List) return Lyrics.empty;
+    return body is List ? body.whereType<Map>().toList() : [];
+  }
+
+  static Future<Lyrics> fetch(Track track) async {
+    final g = guess(track);
+    var results = await _search({
+      'track_name': g.title,
+      'artist_name': g.artist,
+    });
+    if (results.isEmpty) {
+      results = await _search({'q': '${g.artist} ${g.title}'});
+    }
     String? plain;
-    for (final item in body.whereType<Map>()) {
+    for (final item in results) {
       final syncedRaw = item['syncedLyrics'];
       if (syncedRaw is String && syncedRaw.trim().isNotEmpty) {
         final lines = parseLrc(syncedRaw);
@@ -285,7 +353,7 @@ class LrcLib {
 }
 
 // ---------------------------------------------------------------------------
-// Cor dominante da capa (para o fundo do mini player e do player)
+// Cor dominante da capa (fundo do player)
 // ---------------------------------------------------------------------------
 
 final Map<String, Color> _coverCache = {};
@@ -356,17 +424,17 @@ Future<Color?> coverColor(String? url) async {
 
 class Library extends ChangeNotifier {
   final List<Track> favorites = [];
-  final List<Track> locals = [];
   final List<Playlist> playlists = [];
   final List<Track> history = [];
+  String youtubeKey = '';
 
   Future<void> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      _readTracks(prefs.getStringList('favorites'), favorites);
-      _readTracks(prefs.getStringList('locals'), locals);
-      _readTracks(prefs.getStringList('history'), history);
-      final rawPlaylists = prefs.getStringList('playlists');
+      youtubeKey = prefs.getString('yt_key') ?? '';
+      _readTracks(prefs.getStringList('yt_favorites'), favorites);
+      _readTracks(prefs.getStringList('yt_history'), history);
+      final rawPlaylists = prefs.getStringList('yt_playlists');
       if (rawPlaylists != null) {
         for (final item in rawPlaylists) {
           try {
@@ -395,12 +463,23 @@ class Library extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       List<String> enc(List<Track> l) =>
           l.map((t) => jsonEncode(t.toJson())).toList();
-      await prefs.setStringList('favorites', enc(favorites));
-      await prefs.setStringList('locals', enc(locals));
-      await prefs.setStringList('history', enc(history));
-      await prefs.setStringList(
-          'playlists', playlists.map((p) => jsonEncode(p.toJson())).toList());
+      await prefs.setString('yt_key', youtubeKey);
+      await prefs.setStringList('yt_favorites', enc(favorites));
+      await prefs.setStringList('yt_history', enc(history));
+      await prefs.setStringList('yt_playlists',
+          playlists.map((p) => jsonEncode(p.toJson())).toList());
     } catch (_) {}
+  }
+
+  // Chave do YouTube ----------------------------------------------------------
+
+  bool get hasKey => youtubeKey.isNotEmpty;
+
+  Future<void> setYoutubeKey(String key) async {
+    youtubeKey = key.trim();
+    YoutubeApi.clearCache();
+    notifyListeners();
+    await _save();
   }
 
   // Favoritas -------------------------------------------------------------
@@ -413,22 +492,6 @@ class Library extends ChangeNotifier {
     } else {
       favorites.insert(0, track);
     }
-    notifyListeners();
-    await _save();
-  }
-
-  // Arquivos locais ---------------------------------------------------------
-
-  Future<void> addLocals(List<Track> items) async {
-    for (final t in items) {
-      if (!locals.any((e) => e.id == t.id)) locals.add(t);
-    }
-    notifyListeners();
-    await _save();
-  }
-
-  Future<void> removeLocal(String id) async {
-    locals.removeWhere((t) => t.id == id);
     notifyListeners();
     await _save();
   }
@@ -483,20 +546,18 @@ class Library extends ChangeNotifier {
 
   List<Track> get recents => history.take(20).toList();
 
-  /// Gênero mais frequente no histórico (para "Mais para você").
-  String? get topGenre {
+  /// Artista mais frequente no histórico (para "Mais para você").
+  String? get topArtist {
     final counts = <String, int>{};
     for (final t in history) {
-      final g = t.genre;
-      if (g == null || g.isEmpty) continue;
-      counts[g] = (counts[g] ?? 0) + 1;
+      counts[t.artist] = (counts[t.artist] ?? 0) + 1;
     }
     if (counts.isEmpty) return null;
     String? best;
     var bestCount = 0;
-    counts.forEach((g, c) {
+    counts.forEach((a, c) {
       if (c > bestCount) {
-        best = g;
+        best = a;
         bestCount = c;
       }
     });
@@ -505,51 +566,45 @@ class Library extends ChangeNotifier {
 }
 
 // ---------------------------------------------------------------------------
-// Controle do player
+// Controle do player (player oficial do YouTube embutido)
 // ---------------------------------------------------------------------------
 
 enum WaveRepeat { off, all, one }
 
 class PlayerController extends ChangeNotifier {
-  PlayerController() {
-    _player = AudioPlayer(
-      audioPipeline: AudioPipeline(androidAudioEffects: [equalizer]),
-    );
-    _player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed) _onCompleted();
-    });
-    _player.playingStream.listen((_) => notifyListeners());
-  }
-
-  final AndroidEqualizer equalizer = AndroidEqualizer();
-  late final AudioPlayer _player;
   final Random _rng = Random();
   final Map<String, Lyrics> _lyricsCache = {};
+  StreamSubscription<YoutubePlayerValue>? _sub;
   Timer? _sleepTimer;
+  PlayerState _state = PlayerState.unknown;
+  bool _endHandled = false;
+  String? _errorHandledFor;
+  int _consecutiveErrors = 0;
 
-  AudioPlayer get player => _player;
+  /// Player do YouTube; só é criado quando a primeira música é escolhida.
+  YoutubePlayerController? yt;
 
   List<Track> queue = [];
   int index = -1;
   bool shuffle = false;
   WaveRepeat repeat = WaveRepeat.off;
-  bool loading = false;
   String? error;
   Color accent = defaultAccent;
-  double volume = 1.0;
   DateTime? sleepAt;
 
-  /// Chamado quando uma faixa começa a tocar (usado para o histórico).
+  /// Chamado quando uma faixa começa (usado para o histórico).
   void Function(Track track)? onTrackStart;
 
   Track? get current =>
       (index >= 0 && index < queue.length) ? queue[index] : null;
 
-  bool get playing => _player.playing;
+  bool get playing =>
+      _state == PlayerState.playing || _state == PlayerState.buffering;
 
   Future<void> playQueue(List<Track> tracks, int start) async {
     if (tracks.isEmpty || start < 0 || start >= tracks.length) return;
     queue = List<Track>.of(tracks);
+    _consecutiveErrors = 0;
     await _load(start);
   }
 
@@ -577,26 +632,70 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _onValue(YoutubePlayerValue value) {
+    final newState = value.playerState;
+    final changed = newState != _state;
+    _state = newState;
+
+    if (newState == PlayerState.playing) {
+      _endHandled = false;
+      _consecutiveErrors = 0;
+    }
+    if (newState == PlayerState.ended && !_endHandled) {
+      _endHandled = true;
+      _onEnded();
+    }
+    if (value.hasError && current != null && _errorHandledFor != current!.id) {
+      _errorHandledFor = current!.id;
+      _onPlaybackError();
+    }
+    if (changed) notifyListeners();
+  }
+
+  Future<void> _onEnded() async {
+    if (repeat == WaveRepeat.one) {
+      await yt?.seekTo(seconds: 0, allowSeekAhead: true);
+      await yt?.playVideo();
+      return;
+    }
+    await next(auto: true);
+  }
+
+  Future<void> _onPlaybackError() async {
+    _consecutiveErrors++;
+    if (queue.length > 1 && _consecutiveErrors < queue.length) {
+      error = 'Esta música não pode tocar fora do YouTube. Pulando...';
+      notifyListeners();
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      await next(auto: true);
+    } else {
+      error = 'Esta música não pode tocar fora do YouTube.';
+      notifyListeners();
+    }
+  }
+
   Future<void> _load(int i) async {
     if (i < 0 || i >= queue.length) return;
     index = i;
-    loading = true;
     error = null;
-    notifyListeners();
+    _endHandled = false;
     final t = queue[i];
     try {
-      await _player.setAudioSource(
-        AudioSource.uri(
-          Uri.parse(t.uri),
-          tag: MediaItem(
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            artUri: t.artwork == null ? null : Uri.parse(t.artwork!),
+      final existing = yt;
+      if (existing == null) {
+        final controller = YoutubePlayerController.fromVideoId(
+          videoId: t.id,
+          autoPlay: true,
+          params: const YoutubePlayerParams(
+            showControls: true,
+            showFullscreenButton: true,
           ),
-        ),
-      );
-      unawaited(_player.play());
+        );
+        yt = controller;
+        _sub = controller.listen(_onValue);
+      } else {
+        await existing.loadVideoById(videoId: t.id);
+      }
       onTrackStart?.call(t);
       coverColor(t.artwork).then((c) {
         if (current?.id == t.id) {
@@ -607,18 +706,8 @@ class PlayerController extends ChangeNotifier {
     } catch (e) {
       error = 'Não foi possível tocar esta faixa: $e';
     } finally {
-      loading = false;
       notifyListeners();
     }
-  }
-
-  Future<void> _onCompleted() async {
-    if (repeat == WaveRepeat.one) {
-      await _player.seek(Duration.zero);
-      unawaited(_player.play());
-      return;
-    }
-    await next(auto: true);
   }
 
   Future<void> next({bool auto = false}) async {
@@ -634,8 +723,7 @@ class PlayerController extends ChangeNotifier {
         if (repeat == WaveRepeat.all || !auto) {
           n = 0;
         } else {
-          await _player.pause();
-          await _player.seek(Duration.zero);
+          await yt?.pauseVideo();
           notifyListeners();
           return;
         }
@@ -646,23 +734,30 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> previous() async {
     if (queue.isEmpty) return;
-    if (_player.position > const Duration(seconds: 3)) {
-      await _player.seek(Duration.zero);
-      return;
-    }
+    try {
+      final seconds = await yt?.currentTime ?? 0;
+      if (seconds > 3) {
+        await yt?.seekTo(seconds: 0, allowSeekAhead: true);
+        return;
+      }
+    } catch (_) {}
     await _load((index - 1 + queue.length) % queue.length);
   }
 
   Future<void> togglePlay() async {
-    if (current == null) return;
-    if (_player.playing) {
-      await _player.pause();
+    final player = yt;
+    if (player == null || current == null) return;
+    if (playing) {
+      await player.pauseVideo();
     } else {
-      unawaited(_player.play());
+      await player.playVideo();
     }
   }
 
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    await yt?.seekTo(
+        seconds: position.inMilliseconds / 1000.0, allowSeekAhead: true);
+  }
 
   void toggleShuffle() {
     shuffle = !shuffle;
@@ -674,12 +769,6 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setVolume(double v) async {
-    volume = v.clamp(0.0, 1.0).toDouble();
-    await _player.setVolume(volume);
-    notifyListeners();
-  }
-
   /// Timer para dormir: pausa a música depois da duração escolhida.
   void setSleepTimer(Duration? duration) {
     _sleepTimer?.cancel();
@@ -688,7 +777,7 @@ class PlayerController extends ChangeNotifier {
     if (duration != null) {
       sleepAt = DateTime.now().add(duration);
       _sleepTimer = Timer(duration, () async {
-        await _player.pause();
+        await yt?.pauseVideo();
         sleepAt = null;
         _sleepTimer = null;
         notifyListeners();
@@ -713,7 +802,8 @@ class PlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _sleepTimer?.cancel();
-    _player.dispose();
+    _sub?.cancel();
+    yt?.close();
     super.dispose();
   }
 }

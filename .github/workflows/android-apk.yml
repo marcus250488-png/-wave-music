@@ -30,51 +30,17 @@ jobs:
       - name: Generate Android project
         run: flutter create . --platforms=android --org com.wavemusic --project-name wave_music
 
-      - name: Configure Android audio permissions and media notification
+      - name: Add INTERNET permission
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('android/app/src/main/AndroidManifest.xml')
           s = p.read_text()
-          permissions = '''
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.WAKE_LOCK"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-          '''
-          s = s.replace('<application', permissions + '\n    <application', 1)
-          audio_components = '''
-                  <service android:name="com.ryanheise.audioservice.AudioService"
-                      android:foregroundServiceType="mediaPlayback"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.media.browse.MediaBrowserService"/>
-                      </intent-filter>
-                  </service>
-                  <receiver android:name="com.ryanheise.audioservice.MediaButtonReceiver"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MEDIA_BUTTON"/>
-                      </intent-filter>
-                  </receiver>
-          '''
-          s = s.replace('</application>', audio_components + '\n    </application>')
+          if 'android.permission.INTERNET' not in s:
+              s = s.replace('<application', '<uses-permission android:name="android.permission.INTERNET"/>\n    <application', 1)
           p.write_text(s)
           PY
-
-      - name: Use AudioServiceActivity as MainActivity
-        shell: bash
-        run: |
-          f=$(find android/app/src/main -name 'MainActivity.*' | head -n 1)
-          echo "MainActivity: $f"
-          if [[ "$f" == *.kt ]]; then
-            sed -i 's/import io.flutter.embedding.android.FlutterActivity/import com.ryanheise.audioservice.AudioServiceActivity/; s/FlutterActivity()/AudioServiceActivity()/' "$f"
-          else
-            sed -i 's/import io.flutter.embedding.android.FlutterActivity;/import com.ryanheise.audioservice.AudioServiceActivity;/; s/extends FlutterActivity/extends AudioServiceActivity/' "$f"
-          fi
-          cat "$f"
 
       - name: Force compileSdk 36 on plugin modules
         shell: bash

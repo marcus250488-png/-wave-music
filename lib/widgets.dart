@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart'
+    show YoutubePlayer;
 
 import 'core.dart';
 
@@ -124,12 +126,14 @@ class StateMessage extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.onRetry,
+    this.retryLabel = 'Tentar de novo',
   });
 
   final IconData icon;
   final String title;
   final String? subtitle;
   final VoidCallback? onRetry;
+  final String retryLabel;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -155,7 +159,7 @@ class StateMessage extends StatelessWidget {
             if (onRetry != null) ...[
               const SizedBox(height: 12),
               FilledButton.tonal(
-                  onPressed: onRetry, child: const Text('Tentar de novo')),
+                  onPressed: onRetry, child: Text(retryLabel)),
             ],
           ],
         ),
@@ -511,170 +515,176 @@ Future<void> showAddToPlaylist(BuildContext context, Track track) =>
     );
 
 // ---------------------------------------------------------------------------
-// Mini player (com a cor da capa)
+// Player (vídeo oficial do YouTube + controles). Fica sempre visível enquanto
+// toca, como pedem as regras do player incorporado do YouTube.
 // ---------------------------------------------------------------------------
 
-class MiniPlayer extends StatelessWidget {
-  const MiniPlayer({super.key, required this.onTap});
+class PlayerDock extends StatelessWidget {
+  const PlayerDock({
+    super.key,
+    required this.lyricsOpen,
+    required this.onToggleLyrics,
+  });
 
-  final VoidCallback onTap;
+  final bool lyricsOpen;
+  final VoidCallback onToggleLyrics;
+
+  String _hhmm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   @override
-  Widget build(BuildContext context) {
-    final ctrl = playerCtrl;
-    final track = ctrl.current;
-    if (track == null) return const SizedBox.shrink();
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 400),
-        margin: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-        padding: const EdgeInsets.fromLTRB(8, 7, 4, 0),
-        decoration: BoxDecoration(
-          color: ctrl.accent,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Row(
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: Listenable.merge([playerCtrl, libStore]),
+        builder: (context, _) {
+          final ctrl = playerCtrl;
+          final track = ctrl.current;
+          final yt = ctrl.yt;
+          if (track == null || yt == null) return const SizedBox.shrink();
+          final fav = libStore.isFavorite(track.id);
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
+            color: ctrl.accent,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Art(url: track.artwork, size: 43, radius: 8),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                YoutubePlayer(controller: yt, aspectRatio: 16 / 9),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 4, 0, 4),
+                  child: Row(
                     children: [
-                      Text(track.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
-                      Text(track.artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Colors.white70, fontSize: 12)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(track.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                            Text(
+                              ctrl.sleepAt != null
+                                  ? '${track.artist} • desliga às ${_hhmm(ctrl.sleepAt!)}'
+                                  : track.artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => libStore.toggleFavorite(track),
+                        icon: Icon(
+                          fav ? Icons.favorite : Icons.favorite_border,
+                          color: fav ? Colors.pinkAccent : Colors.white,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => ctrl.previous(),
+                        icon: const Icon(Icons.skip_previous),
+                      ),
+                      IconButton(
+                        onPressed: () => ctrl.togglePlay(),
+                        icon: Icon(ctrl.playing ? Icons.pause : Icons.play_arrow,
+                            size: 30),
+                      ),
+                      IconButton(
+                        onPressed: () => ctrl.next(),
+                        icon: const Icon(Icons.skip_next),
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert),
+                        color: panel,
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'shuffle':
+                              ctrl.toggleShuffle();
+                            case 'repeat':
+                              ctrl.cycleRepeat();
+                            case 'lyrics':
+                              onToggleLyrics();
+                            case 'sleep':
+                              showSleepSheet(context);
+                            case 'playlist':
+                              showAddToPlaylist(context, track);
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: 'lyrics',
+                            child: Text(lyricsOpen ? 'Fechar letra' : 'Ver letra'),
+                          ),
+                          PopupMenuItem(
+                            value: 'shuffle',
+                            child: Text(
+                                'Aleatório: ${ctrl.shuffle ? 'ligado' : 'desligado'}'),
+                          ),
+                          PopupMenuItem(
+                            value: 'repeat',
+                            child: Text(
+                                'Repetir: ${ctrl.repeat == WaveRepeat.off ? 'desligado' : ctrl.repeat == WaveRepeat.all ? 'todas' : 'uma música'}'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'sleep',
+                            child: Text('Timer para dormir'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'playlist',
+                            child: Text('Adicionar a uma playlist'),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
-                ListenableBuilder(
-                  listenable: libStore,
-                  builder: (_, __) {
-                    final fav = libStore.isFavorite(track.id);
-                    return IconButton(
-                      onPressed: () => libStore.toggleFavorite(track),
-                      icon: Icon(
-                        fav ? Icons.favorite : Icons.favorite_border,
-                        color: fav ? Colors.pinkAccent : Colors.white,
-                      ),
-                    );
-                  },
-                ),
-                if (ctrl.loading)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2.5),
-                    ),
-                  )
-                else
-                  IconButton(
-                    onPressed: ctrl.togglePlay,
-                    icon: Icon(ctrl.playing ? Icons.pause : Icons.play_arrow,
-                        size: 30),
-                  ),
               ],
             ),
-            StreamBuilder<Duration>(
-              stream: ctrl.player.positionStream,
-              builder: (context, snapshot) {
-                final pos = snapshot.data ?? Duration.zero;
-                final total = ctrl.player.duration ??
-                    Duration(seconds: track.durationSec ?? 0);
-                final value = total.inMilliseconds <= 0
-                    ? 0.0
-                    : (pos.inMilliseconds / total.inMilliseconds)
-                        .clamp(0.0, 1.0)
-                        .toDouble();
-                return Padding(
-                  padding: const EdgeInsets.only(right: 4, bottom: 4, top: 2),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: LinearProgressIndicator(
-                      value: value,
-                      minHeight: 2.5,
-                      backgroundColor: Colors.white24,
-                      color: Colors.white,
-                    ),
-                  ),
-                );
+          );
+        },
+      );
+}
+
+// ---------------------------------------------------------------------------
+// Timer para dormir
+// ---------------------------------------------------------------------------
+
+void showSleepSheet(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: panel,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text('Timer para dormir',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+          for (final m in const [15, 30, 45, 60])
+            ListTile(
+              leading: const Icon(Icons.bedtime_outlined),
+              title: Text('$m minutos'),
+              onTap: () {
+                playerCtrl.setSleepTimer(Duration(minutes: m));
+                Navigator.pop(sheetContext);
+                showSnack(context, 'A música para em $m minutos');
               },
             ),
-          ],
-        ),
+          if (playerCtrl.sleepAt != null)
+            ListTile(
+              leading: const Icon(Icons.timer_off_outlined),
+              title: const Text('Cancelar timer'),
+              onTap: () {
+                playerCtrl.setSleepTimer(null);
+                Navigator.pop(sheetContext);
+                showSnack(context, 'Timer cancelado');
+              },
+            ),
+        ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Barra de progresso do player completo
-// ---------------------------------------------------------------------------
-
-class ProgressBar extends StatefulWidget {
-  const ProgressBar({super.key, this.fallbackSeconds});
-
-  final int? fallbackSeconds;
-
-  @override
-  State<ProgressBar> createState() => _ProgressBarState();
-}
-
-class _ProgressBarState extends State<ProgressBar> {
-  double? _drag;
-
-  @override
-  Widget build(BuildContext context) {
-    final player = playerCtrl.player;
-    return StreamBuilder<Duration>(
-      stream: player.positionStream,
-      builder: (context, snapshot) {
-        final position = snapshot.data ?? Duration.zero;
-        final total =
-            player.duration ?? Duration(seconds: widget.fallbackSeconds ?? 0);
-        final totalMs = total.inMilliseconds.toDouble();
-        final posMs = position.inMilliseconds.toDouble().clamp(0.0, totalMs <= 0 ? 0.0 : totalMs).toDouble();
-        final value = _drag ?? posMs;
-        return Column(
-          children: [
-            Slider(
-              value: totalMs <= 0 ? 0 : value.clamp(0.0, totalMs).toDouble(),
-              max: totalMs <= 0 ? 1 : totalMs,
-              onChanged:
-                  totalMs <= 0 ? null : (v) => setState(() => _drag = v),
-              onChangeEnd: totalMs <= 0
-                  ? null
-                  : (v) async {
-                      await playerCtrl.seek(Duration(milliseconds: v.round()));
-                      if (mounted) setState(() => _drag = null);
-                    },
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(fmt(Duration(milliseconds: value.round())),
-                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  Text(fmt(total),
-                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
+    ),
+  );
 }
