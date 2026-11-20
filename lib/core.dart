@@ -54,6 +54,7 @@ class Track {
     required this.title,
     required this.artist,
     this.artwork,
+    this.channelId,
   });
 
   /// ID do vídeo no YouTube.
@@ -61,12 +62,14 @@ class Track {
   final String title;
   final String artist;
   final String? artwork;
+  final String? channelId;
 
   factory Track.fromJson(Map<String, dynamic> j) => Track(
         id: j['id'].toString(),
         title: j['title'].toString(),
         artist: j['artist'].toString(),
         artwork: j['artwork']?.toString(),
+        channelId: j['channelId']?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -74,7 +77,43 @@ class Track {
         'title': title,
         'artist': artist,
         'artwork': artwork,
+        'channelId': channelId,
       };
+}
+
+class PlaylistInfo {
+  const PlaylistInfo({
+    required this.id,
+    required this.title,
+    required this.channel,
+    this.artwork,
+  });
+
+  final String id;
+  final String title;
+  final String channel;
+  final String? artwork;
+
+  factory PlaylistInfo.fromJson(Map<String, dynamic> j) => PlaylistInfo(
+        id: j['id'].toString(),
+        title: j['title'].toString(),
+        channel: j['channel'].toString(),
+        artwork: j['artwork']?.toString(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'channel': channel,
+        'artwork': artwork,
+      };
+}
+
+class ArtistStat {
+  const ArtistStat(this.name, this.channelId, this.count);
+  final String name;
+  final String? channelId;
+  final int count;
 }
 
 class Playlist {
@@ -126,6 +165,8 @@ class YoutubeApiException implements Exception {
 
 class YoutubeApi {
   static final Map<String, List<Track>> _cache = {};
+  static final Map<String, List<PlaylistInfo>> _playlistCache = {};
+  static final Map<String, String> _avatarCache = {};
 
   static String _unescape(String s) => s
       .replaceAll('&amp;', '&')
@@ -164,47 +205,51 @@ class YoutubeApi {
     return message;
   }
 
-  static List<Track> _parse(dynamic body) {
-    final items = body is Map ? body['items'] : null;
-    if (items is! List) return <Track>[];
-    final out = <Track>[];
-    for (final item in items.whereType<Map>()) {
-      final idRaw = item['id'];
-      final id = idRaw is Map ? idRaw['videoId']?.toString() : idRaw?.toString();
-      final snippet = item['snippet'];
-      if (id == null || id.isEmpty || snippet is! Map) continue;
-      String? art;
-      final thumbs = snippet['thumbnails'];
-      if (thumbs is Map) {
-        for (final k in const ['high', 'medium', 'default']) {
-          final t = thumbs[k];
-          if (t is Map && t['url'] != null) {
-            art = t['url'].toString();
-            break;
-          }
-        }
-      }
-      out.add(Track(
-        id: id,
-        title: _unescape(snippet['title']?.toString() ?? 'Sem título'),
-        artist: _cleanChannel(snippet['channelTitle']?.toString()),
-        artwork: art,
-      ));
+  static String _hash(String s) {
+    var h = 5381;
+    for (final c in s.codeUnits) {
+      h = ((h * 33) ^ c) & 0x7fffffff;
     }
-    return out;
+    return h.toRadixString(36);
   }
 
-  static Future<List<Track>> _call(String path, Map<String, String> query) async {
+  /// Cache em disco com validade: poupa a cota diária da API.
+  static Future<List<Map<String, dynamic>>> _persisted(
+    String key,
+    Duration ttl,
+    Future<List<Map<String, dynamic>>> Function() fetch,
+  ) async {
+    SharedPreferences? prefs;
+    final storageKey = 'cache_${_hash(key)}';
+    try {
+      prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(storageKey);
+      if (raw != null) {
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        final t = m['t'] as int;
+        if (DateTime.now().millisecondsSinceEpoch - t < ttl.inMilliseconds) {
+          return (m['d'] as List)
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
+      }
+    } catch (_) {}
+    final data = await fetch();
+    try {
+      await prefs?.setString(
+        storageKey,
+        jsonEncode({'t': DateTime.now().millisecondsSinceEpoch, 'd': data}),
+      );
+    } catch (_) {}
+    return data;
+  }
+
+  static Future<dynamic> _request(String path, Map<String, String> query) async {
     final key = libStore.youtubeKey;
     if (key.isEmpty) throw const MissingKeyException();
-    final sorted = query.entries.map((e) => '${e.key}=${e.value}').toList()
-      ..sort();
-    final cacheKey = '$path?${sorted.join('&')}';
-    final cached = _cache[cacheKey];
-    if (cached != null) return cached;
-
-    final uri =
-        Uri.https('www.googleapis.com', '/youtube/v3$path', {...query, 'key': key});
+    final uri = Uri.https(
+        'www.googleapis.com', '/youtube/v3$path', {...query, 'key': key});
     final res = await http.get(uri).timeout(const Duration(seconds: 15));
     dynamic body;
     try {
@@ -215,22 +260,72 @@ class YoutubeApi {
     if (res.statusCode != 200) {
       throw YoutubeApiException(_friendlyError(res.statusCode, body));
     }
-    final tracks = _parse(body);
+    return body;
+  }
+
+  static String? _thumb(dynamic thumbs) {
+    if (thumbs is! Map) return null;
+    for (final k in const ['high', 'medium', 'default']) {
+      final t = thumbs[k];
+      if (t is Map && t['url'] != null) return t['url'].toString();
+    }
+    return null;
+  }
+
+  static List<Track> _parseTracks(dynamic body) {
+    final items = body is Map ? body['items'] : null;
+    if (items is! List) return <Track>[];
+    final out = <Track>[];
+    for (final item in items.whereType<Map>()) {
+      final idRaw = item['id'];
+      final id = idRaw is Map ? idRaw['videoId']?.toString() : idRaw?.toString();
+      final snippet = item['snippet'];
+      if (id == null || id.isEmpty || snippet is! Map) continue;
+      out.add(Track(
+        id: id,
+        title: _unescape(snippet['title']?.toString() ?? 'Sem título'),
+        artist: _cleanChannel(snippet['channelTitle']?.toString()),
+        artwork: _thumb(snippet['thumbnails']),
+        channelId: snippet['channelId']?.toString(),
+      ));
+    }
+    return out;
+  }
+
+  static Future<List<Track>> _tracks(
+    String path,
+    Map<String, String> query, {
+    Duration ttl = const Duration(hours: 12),
+  }) async {
+    final sorted = query.entries.map((e) => '${e.key}=${e.value}').toList()
+      ..sort();
+    final cacheKey = '$path?${sorted.join('&')}';
+    final mem = _cache[cacheKey];
+    if (mem != null) return mem;
+    final maps = await _persisted(cacheKey, ttl, () async {
+      final body = await _request(path, query);
+      return _parseTracks(body).map((t) => t.toJson()).toList();
+    });
+    final tracks = maps.map(Track.fromJson).toList();
     _cache[cacheKey] = tracks;
     return tracks;
   }
 
   /// Músicas em alta no Brasil (custa só 1 unidade da cota diária).
-  static Future<List<Track>> trendingBrazil() => _call('/videos', {
-        'part': 'snippet',
-        'chart': 'mostPopular',
-        'videoCategoryId': '10',
-        'regionCode': 'BR',
-        'maxResults': '25',
-      });
+  static Future<List<Track>> trendingBrazil() => _tracks(
+        '/videos',
+        {
+          'part': 'snippet',
+          'chart': 'mostPopular',
+          'videoCategoryId': '10',
+          'regionCode': 'BR',
+          'maxResults': '25',
+        },
+        ttl: const Duration(hours: 3),
+      );
 
   /// Busca músicas (categoria Música, só vídeos que podem ser incorporados).
-  static Future<List<Track>> search(String query) => _call('/search', {
+  static Future<List<Track>> search(String query) => _tracks('/search', {
         'part': 'snippet',
         'type': 'video',
         'videoCategoryId': '10',
@@ -242,7 +337,151 @@ class YoutubeApi {
         'q': query,
       });
 
-  static void clearCache() => _cache.clear();
+  /// Lançamentos recentes (últimas 3 semanas).
+  static Future<List<Track>> latest() {
+    final d = DateTime.now().toUtc().subtract(const Duration(days: 21));
+    String two(int n) => n.toString().padLeft(2, '0');
+    final after = '${d.year}-${two(d.month)}-${two(d.day)}T00:00:00Z';
+    return _tracks('/search', {
+      'part': 'snippet',
+      'type': 'video',
+      'videoCategoryId': '10',
+      'videoEmbeddable': 'true',
+      'videoSyndicated': 'true',
+      'regionCode': 'BR',
+      'relevanceLanguage': 'pt',
+      'order': 'date',
+      'publishedAfter': after,
+      'maxResults': '25',
+      'q': 'clipe oficial música nova lançamento',
+    });
+  }
+
+  /// Playlists do YouTube (mostradas como "álbuns/playlists para você").
+  static Future<List<PlaylistInfo>> searchPlaylists(String query) async {
+    final cacheKey = 'playlists?$query';
+    final mem = _playlistCache[cacheKey];
+    if (mem != null) return mem;
+    final maps = await _persisted(cacheKey, const Duration(hours: 24), () async {
+      final body = await _request('/search', {
+        'part': 'snippet',
+        'type': 'playlist',
+        'regionCode': 'BR',
+        'relevanceLanguage': 'pt',
+        'maxResults': '12',
+        'q': query,
+      });
+      final items = body is Map ? body['items'] : null;
+      final out = <Map<String, dynamic>>[];
+      if (items is List) {
+        for (final item in items.whereType<Map>()) {
+          final idRaw = item['id'];
+          final id = idRaw is Map ? idRaw['playlistId']?.toString() : null;
+          final snippet = item['snippet'];
+          if (id == null || snippet is! Map) continue;
+          out.add(PlaylistInfo(
+            id: id,
+            title: _unescape(snippet['title']?.toString() ?? 'Playlist'),
+            channel: _cleanChannel(snippet['channelTitle']?.toString()),
+            artwork: _thumb(snippet['thumbnails']),
+          ).toJson());
+        }
+      }
+      return out;
+    });
+    final list = maps.map(PlaylistInfo.fromJson).toList();
+    _playlistCache[cacheKey] = list;
+    return list;
+  }
+
+  /// Músicas de uma playlist (custa 1 unidade).
+  static Future<List<Track>> playlistTracks(String playlistId) async {
+    final cacheKey = 'playlistItems?$playlistId';
+    final mem = _cache[cacheKey];
+    if (mem != null) return mem;
+    final maps = await _persisted(cacheKey, const Duration(hours: 24), () async {
+      final body = await _request('/playlistItems', {
+        'part': 'snippet',
+        'playlistId': playlistId,
+        'maxResults': '50',
+      });
+      final items = body is Map ? body['items'] : null;
+      final out = <Map<String, dynamic>>[];
+      if (items is List) {
+        for (final item in items.whereType<Map>()) {
+          final snippet = item['snippet'];
+          if (snippet is! Map) continue;
+          final resource = snippet['resourceId'];
+          final id = resource is Map ? resource['videoId']?.toString() : null;
+          final title = snippet['title']?.toString() ?? '';
+          if (id == null || title == 'Private video' || title == 'Deleted video') {
+            continue;
+          }
+          out.add(Track(
+            id: id,
+            title: _unescape(title),
+            artist: _cleanChannel(
+                (snippet['videoOwnerChannelTitle'] ?? snippet['channelTitle'])
+                    ?.toString()),
+            artwork: _thumb(snippet['thumbnails']),
+            channelId: snippet['videoOwnerChannelId']?.toString(),
+          ).toJson());
+        }
+      }
+      return out;
+    });
+    final tracks = maps.map(Track.fromJson).toList();
+    _cache[cacheKey] = tracks;
+    return tracks;
+  }
+
+  /// Fotos dos canais/artistas (custa 1 unidade para até 50 canais).
+  static Future<Map<String, String>> channelAvatars(List<String> ids) async {
+    final result = <String, String>{};
+    final missing = <String>[];
+    for (final id in ids) {
+      final cached = _avatarCache[id];
+      if (cached != null) {
+        result[id] = cached;
+      } else {
+        missing.add(id);
+      }
+    }
+    if (missing.isNotEmpty) {
+      final body = await _request('/channels', {
+        'part': 'snippet',
+        'id': missing.join(','),
+        'maxResults': '50',
+      });
+      final items = body is Map ? body['items'] : null;
+      if (items is List) {
+        for (final item in items.whereType<Map>()) {
+          final id = item['id']?.toString();
+          final snippet = item['snippet'];
+          if (id == null || snippet is! Map) continue;
+          final thumbs = snippet['thumbnails'];
+          final url = _thumb(thumbs is Map ? {'high': thumbs['medium'] ?? thumbs['default']} : null);
+          if (url != null) {
+            _avatarCache[id] = url;
+            result[id] = url;
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Limpa os caches (memória e disco). Usado no "puxar para atualizar".
+  static Future<void> clearCache() async {
+    _cache.clear();
+    _playlistCache.clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final k in prefs.getKeys().where((k) => k.startsWith('cache_')).toList()) {
+        await prefs.remove(k);
+      }
+    } catch (_) {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +552,7 @@ class LrcLib {
   static Future<List<Map>> _search(Map<String, String> query) async {
     final uri = Uri.https('lrclib.net', '/api/search', query);
     final res = await http
-        .get(uri, headers: {'User-Agent': 'WaveMusic/0.5.0'})
+        .get(uri, headers: {'User-Agent': 'WaveMusic/0.6.0'})
         .timeout(const Duration(seconds: 10));
     if (res.statusCode != 200) return [];
     final body = jsonDecode(utf8.decode(res.bodyBytes));
@@ -426,6 +665,7 @@ class Library extends ChangeNotifier {
   final List<Track> favorites = [];
   final List<Playlist> playlists = [];
   final List<Track> history = [];
+  final List<String> searches = [];
   String youtubeKey = '';
 
   Future<void> load() async {
@@ -434,6 +674,7 @@ class Library extends ChangeNotifier {
       youtubeKey = prefs.getString('yt_key') ?? '';
       _readTracks(prefs.getStringList('yt_favorites'), favorites);
       _readTracks(prefs.getStringList('yt_history'), history);
+      searches.addAll(prefs.getStringList('yt_searches') ?? const <String>[]);
       final rawPlaylists = prefs.getStringList('yt_playlists');
       if (rawPlaylists != null) {
         for (final item in rawPlaylists) {
@@ -466,6 +707,7 @@ class Library extends ChangeNotifier {
       await prefs.setString('yt_key', youtubeKey);
       await prefs.setStringList('yt_favorites', enc(favorites));
       await prefs.setStringList('yt_history', enc(history));
+      await prefs.setStringList('yt_searches', searches);
       await prefs.setStringList('yt_playlists',
           playlists.map((p) => jsonEncode(p.toJson())).toList());
     } catch (_) {}
@@ -546,22 +788,39 @@ class Library extends ChangeNotifier {
 
   List<Track> get recents => history.take(20).toList();
 
-  /// Artista mais frequente no histórico (para "Mais para você").
-  String? get topArtist {
+  /// Artistas mais ouvidos (histórico + favoritas).
+  List<ArtistStat> topArtists(int n) {
     final counts = <String, int>{};
-    for (final t in history) {
+    final channels = <String, String>{};
+    for (final t in [...history, ...favorites]) {
       counts[t.artist] = (counts[t.artist] ?? 0) + 1;
+      final c = t.channelId;
+      if (c != null && c.isNotEmpty) channels[t.artist] = c;
     }
-    if (counts.isEmpty) return null;
-    String? best;
-    var bestCount = 0;
-    counts.forEach((a, c) {
-      if (c > bestCount) {
-        best = a;
-        bestCount = c;
-      }
-    });
-    return best;
+    final entries = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return entries
+        .take(n)
+        .map((e) => ArtistStat(e.key, channels[e.key], e.value))
+        .toList();
+  }
+
+  // Buscas recentes -----------------------------------------------------------
+
+  Future<void> addSearch(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    searches.removeWhere((e) => e.toLowerCase() == q.toLowerCase());
+    searches.insert(0, q);
+    if (searches.length > 8) searches.removeRange(8, searches.length);
+    notifyListeners();
+    await _save();
+  }
+
+  Future<void> clearSearches() async {
+    searches.clear();
+    notifyListeners();
+    await _save();
   }
 }
 
@@ -757,6 +1016,15 @@ class PlayerController extends ChangeNotifier {
   Future<void> seek(Duration position) async {
     await yt?.seekTo(
         seconds: position.inMilliseconds / 1000.0, allowSeekAhead: true);
+  }
+
+  Future<void> jumpTo(int i) => _load(i);
+
+  void removeFromQueue(int i) {
+    if (i < 0 || i >= queue.length || i == index) return;
+    queue.removeAt(i);
+    if (i < index) index--;
+    notifyListeners();
   }
 
   void toggleShuffle() {

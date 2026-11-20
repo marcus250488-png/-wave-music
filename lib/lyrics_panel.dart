@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core.dart';
+import 'widgets.dart';
 
 /// Painel de letras sincronizadas (cobre a área de conteúdo; o player do
 /// YouTube continua visível embaixo).
@@ -164,4 +165,77 @@ class _LyricsPanelState extends State<LyricsPanel> {
       },
     );
   }
+}
+
+/// Fila de reprodução (cobre a área de conteúdo; o player continua visível).
+class QueuePanel extends StatelessWidget {
+  const QueuePanel({super.key, required this.onClose});
+
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: bg,
+        child: ListenableBuilder(
+          listenable: playerCtrl,
+          builder: (context, _) {
+            final queue = playerCtrl.queue;
+            final current = playerCtrl.index;
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Fila de reprodução',
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w800)),
+                      ),
+                      IconButton(
+                        onPressed: onClose,
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: queue.isEmpty
+                      ? const Center(
+                          child: Text('A fila está vazia',
+                              style: TextStyle(color: muted)))
+                      : ListView.builder(
+                          itemCount: queue.length,
+                          itemBuilder: (context, i) {
+                            final t = queue[i];
+                            final isCurrent = i == current;
+                            return ListTile(
+                              onTap: () => playerCtrl.jumpTo(i),
+                              leading: Art(url: t.artwork, size: 44, radius: 8),
+                              title: Text(t.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: isCurrent ? blue : null)),
+                              subtitle: Text(t.artist,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: muted)),
+                              trailing: isCurrent
+                                  ? const Icon(Icons.graphic_eq, color: blue)
+                                  : IconButton(
+                                      onPressed: () =>
+                                          playerCtrl.removeFromQueue(i),
+                                      icon: const Icon(Icons.close, color: muted),
+                                    ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
 }

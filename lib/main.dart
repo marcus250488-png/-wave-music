@@ -43,7 +43,7 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _tab = 0;
-  bool _lyricsOpen = false;
+  String? _panel;
 
   @override
   void initState() {
@@ -81,19 +81,24 @@ class _ShellState extends State<Shell> {
                         LibraryPage(),
                       ],
                     ),
-                    if (_lyricsOpen)
+                    if (_panel == 'lyrics')
                       Positioned.fill(
                         child: LyricsPanel(
-                          onClose: () => setState(() => _lyricsOpen = false),
+                          onClose: () => setState(() => _panel = null),
+                        ),
+                      ),
+                    if (_panel == 'queue')
+                      Positioned.fill(
+                        child: QueuePanel(
+                          onClose: () => setState(() => _panel = null),
                         ),
                       ),
                   ],
                 ),
               ),
               PlayerDock(
-                lyricsOpen: _lyricsOpen,
-                onToggleLyrics: () =>
-                    setState(() => _lyricsOpen = !_lyricsOpen),
+                panel: _panel,
+                onPanel: (p) => setState(() => _panel = _panel == p ? null : p),
               ),
               NavigationBar(
                 selectedIndex: _tab,

@@ -1,7 +1,7 @@
 name: wave_music
 description: Wave Music - player de musica com YouTube para Android.
 publish_to: 'none'
-version: 0.5.0+6
+version: 0.6.0+7
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.2
+  url_launcher: ^6.3.1
   shared_preferences: ^2.3.5
   youtube_player_iframe: ^6.0.0
 

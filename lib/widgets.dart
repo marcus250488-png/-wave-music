@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart'
     show YoutubePlayer;
 
@@ -522,12 +523,13 @@ Future<void> showAddToPlaylist(BuildContext context, Track track) =>
 class PlayerDock extends StatelessWidget {
   const PlayerDock({
     super.key,
-    required this.lyricsOpen,
-    required this.onToggleLyrics,
+    required this.panel,
+    required this.onPanel,
   });
 
-  final bool lyricsOpen;
-  final VoidCallback onToggleLyrics;
+  /// Painel aberto no momento: 'lyrics', 'queue' ou null.
+  final String? panel;
+  final void Function(String panel) onPanel;
 
   String _hhmm(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
@@ -603,7 +605,15 @@ class PlayerDock extends StatelessWidget {
                             case 'repeat':
                               ctrl.cycleRepeat();
                             case 'lyrics':
-                              onToggleLyrics();
+                              onPanel('lyrics');
+                            case 'queue':
+                              onPanel('queue');
+                            case 'music':
+                              launchUrl(
+                                Uri.parse(
+                                    'https://music.youtube.com/watch?v=${track.id}'),
+                                mode: LaunchMode.externalApplication,
+                              );
                             case 'sleep':
                               showSleepSheet(context);
                             case 'playlist':
@@ -613,7 +623,11 @@ class PlayerDock extends StatelessWidget {
                         itemBuilder: (_) => [
                           PopupMenuItem(
                             value: 'lyrics',
-                            child: Text(lyricsOpen ? 'Fechar letra' : 'Ver letra'),
+                            child: Text(panel == 'lyrics' ? 'Fechar letra' : 'Ver letra'),
+                          ),
+                          PopupMenuItem(
+                            value: 'queue',
+                            child: Text(panel == 'queue' ? 'Fechar fila' : 'Ver fila'),
                           ),
                           PopupMenuItem(
                             value: 'shuffle',
@@ -632,6 +646,10 @@ class PlayerDock extends StatelessWidget {
                           const PopupMenuItem(
                             value: 'playlist',
                             child: Text('Adicionar a uma playlist'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'music',
+                            child: Text('Abrir no YouTube Music'),
                           ),
                         ],
                       ),
@@ -687,4 +705,199 @@ void showSleepSheet(BuildContext context) {
       ),
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Cartões e carrosséis estilo "streaming"
+// ---------------------------------------------------------------------------
+
+/// Carrossel horizontal genérico.
+class HList extends StatelessWidget {
+  const HList({super.key, required this.height, required this.children});
+
+  final double height;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: height,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: children.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 12),
+          itemBuilder: (context, i) => children[i],
+        ),
+      );
+}
+
+/// "Mix de ..." — capa com selo e artistas embaixo.
+class MixCard extends StatelessWidget {
+  const MixCard({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.cover,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final String? cover;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: SizedBox(
+          width: 150,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                children: [
+                  Art(url: cover, size: 150, radius: 10),
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: blue,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 12)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: muted, fontSize: 12)),
+            ],
+          ),
+        ),
+      );
+}
+
+/// "Rádio ..." — quadrado colorido.
+class RadioCard extends StatelessWidget {
+  const RadioCard({
+    super.key,
+    required this.title,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String title;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 150,
+          height: 150,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            gradient: LinearGradient(
+              colors: [color, color.withValues(alpha: .55)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('RÁDIO',
+                  style: TextStyle(
+                      fontSize: 10,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white70)),
+              const Spacer(),
+              Text(title.replaceFirst('Rádio ', ''),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w900, height: 1.1)),
+            ],
+          ),
+        ),
+      );
+}
+
+/// Playlist do YouTube.
+class PlaylistCard extends StatelessWidget {
+  const PlaylistCard({super.key, required this.info, required this.onTap});
+
+  final PlaylistInfo info;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: SizedBox(
+          width: 150,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Art(url: info.artwork, size: 150, radius: 10),
+              const SizedBox(height: 8),
+              Text(info.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              Text(info.channel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: muted, fontSize: 12)),
+            ],
+          ),
+        ),
+      );
+}
+
+/// Artista em círculo.
+class ArtistAvatar extends StatelessWidget {
+  const ArtistAvatar({
+    super.key,
+    required this.name,
+    required this.url,
+    required this.onTap,
+  });
+
+  final String name;
+  final String? url;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: SizedBox(
+          width: 108,
+          child: Column(
+            children: [
+              Art(url: url, size: 100, radius: 50),
+              const SizedBox(height: 8),
+              Text(name,
+                  maxLines: 2,
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            ],
+          ),
+        ),
+      );
 }
