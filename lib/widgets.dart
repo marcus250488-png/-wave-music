@@ -523,12 +523,12 @@ Future<void> showAddToPlaylist(BuildContext context, Track track) =>
 class PlayerDock extends StatelessWidget {
   const PlayerDock({
     super.key,
-    required this.panel,
+    required this.openPanel,
     required this.onPanel,
   });
 
   /// Painel aberto no momento: 'lyrics', 'queue' ou null.
-  final String? panel;
+  final String? openPanel;
   final void Function(String panel) onPanel;
 
   String _hhmm(DateTime t) =>
@@ -623,11 +623,11 @@ class PlayerDock extends StatelessWidget {
                         itemBuilder: (_) => [
                           PopupMenuItem(
                             value: 'lyrics',
-                            child: Text(panel == 'lyrics' ? 'Fechar letra' : 'Ver letra'),
+                            child: Text(openPanel == 'lyrics' ? 'Fechar letra' : 'Ver letra'),
                           ),
                           PopupMenuItem(
                             value: 'queue',
-                            child: Text(panel == 'queue' ? 'Fechar fila' : 'Ver fila'),
+                            child: Text(openPanel == 'queue' ? 'Fechar fila' : 'Ver fila'),
                           ),
                           PopupMenuItem(
                             value: 'shuffle',

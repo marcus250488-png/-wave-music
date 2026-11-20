@@ -97,7 +97,7 @@ class _ShellState extends State<Shell> {
                 ),
               ),
               PlayerDock(
-                panel: _panel,
+                openPanel: _panel,
                 onPanel: (p) => setState(() => _panel = _panel == p ? null : p),
               ),
               NavigationBar(
